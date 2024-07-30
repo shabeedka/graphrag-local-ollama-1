@@ -5,7 +5,7 @@
 
 import asyncio
 from collections.abc import Callable
-from typing import Any
+from typing import Any,List
 
 import numpy as np
 import tiktoken
@@ -68,12 +68,51 @@ class OpenAIEmbedding(BaseTextEmbedding, OpenAILLMImpl):
         self.token_encoder = tiktoken.get_encoding(self.encoding_name)
         self.retry_error_types = retry_error_types
 
-    def embed(self, text: str, **kwargs: Any) -> list[float]:
-        """
-        Embed text using OpenAI Embedding's sync function.
+    # def embed(self, text: str, **kwargs: Any) -> list[float]:
+    #     """
+    #     Embed text using OpenAI Embedding's sync function.
 
-        For text longer than max_tokens, chunk texts into max_tokens, embed each chunk, then combine using weighted average.
-        Please refer to: https://github.com/openai/openai-cookbook/blob/main/examples/Embedding_long_inputs.ipynb
+    #     For text longer than max_tokens, chunk texts into max_tokens, embed each chunk, then combine using weighted average.
+    #     Please refer to: https://github.com/openai/openai-cookbook/blob/main/examples/Embedding_long_inputs.ipynb
+    #     """
+    #     token_chunks = chunk_text(
+    #         text=text, token_encoder=self.token_encoder, max_tokens=self.max_tokens
+    #     )
+    #     chunk_embeddings = []
+    #     chunk_lens = []
+    #     for chunk in token_chunks:
+    #         try:
+    #             embedding, chunk_len = self._embed_with_retry(chunk, **kwargs)
+    #             chunk_embeddings.append(embedding)
+    #             chunk_lens.append(chunk_len)
+    #         # TODO: catch a more specific exception
+    #         except Exception as e:  # noqa BLE001
+    #             self._reporter.error(
+    #                 message="Error embedding chunk",
+    #                 details={self.__class__.__name__: str(e)},
+    #             )
+
+    #             continue
+    #     chunk_embeddings = np.average(chunk_embeddings, axis=0, weights=chunk_lens)
+    #     chunk_embeddings = chunk_embeddings / np.linalg.norm(chunk_embeddings)
+    #     return chunk_embeddings.tolist()
+    def _embed_with_retry_ollama(self, chunk: str, **kwargs: Any) -> List[float]:
+        import ollama
+        # Assuming chunk is a string of text
+        try:
+           
+            response = ollama.embeddings(model="nomic-embed-text:latest", prompt=chunk)
+           
+        except Exception as e:
+            print(e)
+        embedding = response['embedding']
+        chunk_len = len(chunk)
+        return embedding, chunk_len
+    def embed(self, text: str, **kwargs: Any) -> List[float]:
+        """
+        Embed text using Ollama's embedding function.
+
+        For text longer than max_tokens, chunk text into max_tokens, embed each chunk, then combine using weighted average.
         """
         token_chunks = chunk_text(
             text=text, token_encoder=self.token_encoder, max_tokens=self.max_tokens
@@ -82,21 +121,20 @@ class OpenAIEmbedding(BaseTextEmbedding, OpenAILLMImpl):
         chunk_lens = []
         for chunk in token_chunks:
             try:
-                embedding, chunk_len = self._embed_with_retry(chunk, **kwargs)
+                chunk_text_l = self.token_encoder.decode(chunk)  # Decode tokens back to text
+                embedding, chunk_len = self._embed_with_retry_ollama(chunk_text_l, **kwargs)
                 chunk_embeddings.append(embedding)
                 chunk_lens.append(chunk_len)
-            # TODO: catch a more specific exception
-            except Exception as e:  # noqa BLE001
+            except Exception as e:
                 self._reporter.error(
                     message="Error embedding chunk",
                     details={self.__class__.__name__: str(e)},
                 )
-
                 continue
+        # Calculate the weighted average of the chunk embeddings
         chunk_embeddings = np.average(chunk_embeddings, axis=0, weights=chunk_lens)
         chunk_embeddings = chunk_embeddings / np.linalg.norm(chunk_embeddings)
         return chunk_embeddings.tolist()
-
     async def aembed(self, text: str, **kwargs: Any) -> list[float]:
         """
         Embed text using OpenAI Embedding's async function.
